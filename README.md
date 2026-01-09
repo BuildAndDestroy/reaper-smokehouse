@@ -165,9 +165,8 @@ The workflow runs automatically on all pull requests to the `main` branch and in
 - ✅ File structure verification
 
 **Status Badge**: Add this to your README to show build status:
-```markdown
-![PR Build](https://github.com/YOUR_USERNAME/reapers-smokehouse/workflows/PR%20Build%20and%20Test/badge.svg)
-```
+![PR Build](https://github.com/BuildAndDestroy/reapers-smokehouse/workflows/PR%20Build%20and%20Test/badge.svg)
+
 
 See `.github/workflows/README.md` for more details.
 

@@ -58,9 +58,7 @@ Runs on all pull requests targeting the `main` branch.
 
 Add this to your README.md to show build status:
 
-```markdown
-![PR Build](https://github.com/YOUR_USERNAME/reapers-smokehouse/workflows/PR%20Build%20and%20Test/badge.svg)
-```
+![PR Build](https://github.com/BuildAndDestroy/reapers-smokehouse/workflows/PR%20Build%20and%20Test/badge.svg)
 
 ## Customization
 
