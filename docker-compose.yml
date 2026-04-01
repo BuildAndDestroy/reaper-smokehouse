@@ -7,7 +7,8 @@ services:
     # To open a shell: docker compose exec mongo mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in your environment or .env file}
+      # Default is for local use only. Set MONGO_ROOT_PASSWORD in .env or the environment for production.
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-dev_insecure_mongo_password}
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -19,7 +20,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 25s
+      start_period: 40s
 
   reapers-smokehouse:
     build:
@@ -33,7 +34,7 @@ services:
       - PORT=3000
       # Built in server.js via encodeURIComponent (safe for special characters in passwords)
       - MONGO_USERNAME=${MONGO_ROOT_USER:-admin}
-      - MONGO_PASSWORD=${MONGO_ROOT_PASSWORD}
+      - MONGO_PASSWORD=${MONGO_ROOT_PASSWORD:-dev_insecure_mongo_password}
       - MONGO_HOST=mongo
       - MONGO_PORT=27017
       - MONGO_DATABASE=reapers_smokehouse

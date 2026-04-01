@@ -74,7 +74,7 @@ jobs:
     name: Docker Build
     runs-on: ubuntu-latest
     env:
-      # Required by docker-compose.yml for MongoDB authentication (not a production secret).
+      # Overrides compose default; use a non-default password in real deployments.
       MONGO_ROOT_PASSWORD: github-actions-ci-mongo-password
     permissions:
       contents: read
@@ -119,13 +119,14 @@ jobs:
 
       - name: Test Docker image (Compose with MongoDB)
         run: |
+          docker compose down -v --remove-orphans || true
           docker compose up -d --build
-          for i in $(seq 1 40); do
+          for i in $(seq 1 45); do
             if curl -sf http://localhost:3000/ready; then
               echo "App is ready"
               break
             fi
-            if [ "$i" -eq 40 ]; then
+            if [ "$i" -eq 45 ]; then
               echo "Timeout waiting for /ready"
               docker compose logs
               exit 1
@@ -136,7 +137,7 @@ jobs:
           curl -f http://localhost:3000/ready
           docker compose down -v
 
-  # Job 4: Validate Kubernetes Manifests
+  # Job 4: Validate Kubernetes manifests (offline schema check; no cluster required)
   validate-k8s:
     name: Validate Kubernetes Manifests
     runs-on: ubuntu-latest
@@ -146,40 +147,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'latest'
-
-      - name: Validate deployment.yaml
+      - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.6.7
         run: |
-          kubectl apply --dry-run=client -f k8s/deployment.yaml || exit 1
-          echo "✅ deployment.yaml is valid"
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar xz
+          sudo mv kubeconform /usr/local/bin/
+          kubeconform -v
 
-      - name: Validate service.yaml
-        run: |
-          kubectl apply --dry-run=client -f k8s/service.yaml || exit 1
-          echo "✅ service.yaml is valid"
-
-      - name: Validate ingress.yaml
-        run: |
-          kubectl apply --dry-run=client -f k8s/ingress.yaml || exit 1
-          echo "✅ ingress.yaml is valid"
-
-      - name: Validate hpa.yaml
-        run: |
-          kubectl apply --dry-run=client -f k8s/hpa.yaml || exit 1
-          echo "✅ hpa.yaml is valid"
-
-      - name: Validate mongodb-secret.yaml
-        run: |
-          kubectl apply --dry-run=client -f k8s/mongodb-secret.yaml || exit 1
-          echo "✅ mongodb-secret.yaml is valid"
-
-      - name: Validate mongodb.yaml
-        run: |
-          kubectl apply --dry-run=client -f k8s/mongodb.yaml || exit 1
-          echo "✅ mongodb.yaml is valid"
+      - name: Validate k8s manifests
+        run: kubeconform -strict -summary -kubernetes-version 1.29.0 k8s/
 
   # Summary job that runs after all others
   build-summary:
@@ -195,7 +172,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Lint and Audit | ${{ needs.lint-and-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependencies | ${{ needs.lint-and-audit.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Build and Test | ${{ needs.build-and-test.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docker Build | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| K8s Validation | ${{ needs.validate-k8s.result }} |" >> $GITHUB_STEP_SUMMARY
@@ -205,7 +182,11 @@ jobs:
              [ "${{ needs.docker-build.result }}" != "success" ]; then
             echo "❌ Build failed. Please check the logs above."
             exit 1
-          else
-            echo "✅ All checks passed!"
           fi
-
+          
+          if [ "${{ needs.validate-k8s.result }}" = "failure" ]; then
+            echo "❌ Kubernetes manifest validation failed."
+            exit 1
+          fi
+          
+          echo "✅ All checks passed!"

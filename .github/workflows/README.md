@@ -44,20 +44,17 @@ Runs on all pull requests targeting the `main` branch.
    - Caches layers for faster builds
 
 4. **Validate Kubernetes Manifests**
-   - Validates all Kubernetes YAML files using `kubectl --dry-run`
-   - Includes `mongodb-secret.yaml`, `mongodb.yaml`, and the app deployment (MongoDB credentials via Secret)
+   - Uses [kubeconform](https://github.com/yannh/kubeconform) against the Kubernetes OpenAPI schemas (no cluster or kubeconfig required)
    - Only runs on PRs from the same repository (not forks)
 
 5. **Build Summary**
    - Aggregates results from all jobs
-   - Provides a summary in the GitHub Actions UI
-   - Fails if any critical job fails
+   - Fails if Dependencies, Build and Test, Docker Build, or K8s Validation failed (skipped K8s job on forks does not fail the summary)
 
 ## Requirements
 
 - Node.js 18+
 - Docker (for Docker build job)
-- kubectl (for K8s validation job)
 
 ## Status Badge
 
