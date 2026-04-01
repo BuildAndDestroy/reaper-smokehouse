@@ -100,10 +100,10 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Avoid prefix={{branch}}- on PRs: branch can be empty → invalid tag ": -2f3b77a"
           tags: |
             type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=raw,value=pr-{{number}}
+            type=sha,prefix=sha-
 
       - name: Build Docker image
         uses: docker/build-push-action@v5
