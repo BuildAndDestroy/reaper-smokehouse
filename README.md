@@ -12,6 +12,11 @@ A responsive website for Reaper's Smokehouse, specializing in premium smoked bri
 - 📧 Contact form
 - 🚀 Scalable backend architecture
 
+## MongoDB and the public site
+
+- **Website visitors** do not log in. The marketing pages and contact form are **public**; anyone who can reach the app URL can use them (subject to rate limiting). There is no “website password” protecting MongoDB from browsers—MongoDB is only reachable from your server process (or your cluster network), not from end users’ browsers.
+- **MongoDB** uses **authentication** (SCRAM). Only clients that supply valid credentials—your Node app, or an operator using `mongosh`—can access the data. Default Docker Compose does **not** publish MongoDB on a host port, so random machines on your LAN cannot connect to the database unless you add a `ports:` mapping.
+
 ## Project Structure
 
 ```
@@ -25,11 +30,15 @@ reapers-smokehouse/
 │   └── main.js             # JavaScript functionality
 ├── assets/
 │   └── images/             # Image assets
+├── models/                 # Mongoose models (contact submissions)
 ├── k8s/                    # Kubernetes manifests
 │   ├── deployment.yaml
+│   ├── mongodb-secret.yaml # DB credentials (edit before real clusters)
+│   ├── mongodb.yaml        # MongoDB + PVC + Service
 │   ├── service.yaml
 │   ├── ingress.yaml
 │   └── hpa.yaml
+├── .env.example            # Template for Compose MongoDB password
 ├── server.js               # Express server
 ├── Dockerfile              # Docker image definition
 ├── docker-compose.yml      # Docker Compose configuration
@@ -40,21 +49,47 @@ reapers-smokehouse/
 
 ### Standalone Server
 
-1. Install dependencies:
+Contact form submissions are stored in **MongoDB**. Configure either a full **`MONGODB_URI`** or **`MONGO_USERNAME`** + **`MONGO_PASSWORD`** (plus optional `MONGO_HOST`, `MONGO_PORT`, `MONGO_DATABASE`, `MONGO_AUTH_SOURCE`). The server exits if neither is set.
+
+1. Run MongoDB locally with authentication enabled, or use a managed database. Example (one-off, **data directory empty** so root user is created):
+
+```bash
+docker run -d --name mongo -p 27017:27017 \
+  -e MONGO_INITDB_ROOT_USERNAME=admin \
+  -e MONGO_INITDB_ROOT_PASSWORD='choose-a-strong-password' \
+  mongo:7
+```
+
+2. Install dependencies:
 ```bash
 npm install
 ```
 
-2. Start the server:
+3. Point the app at the database (password URL-encoded if you use `MONGODB_URI` and it contains special characters):
+
 ```bash
+export MONGO_USERNAME=admin
+export MONGO_PASSWORD='choose-a-strong-password'
+export MONGO_HOST=127.0.0.1
+export MONGO_AUTH_SOURCE=admin
 npm start
 ```
 
-3. Open your browser to `http://localhost:3000`
+Or a single URI:
+
+```bash
+export MONGODB_URI='mongodb://admin:choose-a-strong-password@127.0.0.1:27017/reapers_smokehouse?authSource=admin'
+npm start
+```
+
+4. Open your browser to `http://localhost:3000`
+
+**Note:** If MongoDB was first created **without** auth on an existing data volume, flipping on `MONGO_INITDB_*` alone will not add users. Create users manually or start from an empty volume; see [MongoDB authentication](https://www.mongodb.com/docs/manual/tutorial/enable-authentication/).
 
 ### Development Mode
 
-For development with auto-reload:
+For development with auto-reload, set the same MongoDB variables as in standalone mode (`MONGO_USERNAME` / `MONGO_PASSWORD` or `MONGODB_URI`), then:
+
 ```bash
 npm run dev
 ```
@@ -67,14 +102,33 @@ docker build -t reapers-smokehouse:latest .
 ```
 
 ### Run with Docker:
+The image expects MongoDB credentials. Pass a full URI or split variables (same as standalone):
+
 ```bash
-docker run -p 3000:3000 reapers-smokehouse:latest
+docker run -p 3000:3000 \
+  -e MONGO_USERNAME=admin \
+  -e MONGO_PASSWORD='your-password' \
+  -e MONGO_HOST=host.docker.internal \
+  -e MONGO_AUTH_SOURCE=admin \
+  reapers-smokehouse:latest
 ```
 
 ### Run with Docker Compose:
+Copy `.env.example` to `.env`, set **`MONGO_ROOT_PASSWORD`** to a long random value, then:
+
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
+
+Compose enables MongoDB **`MONGO_INITDB_ROOT_*`** on first start (empty volume only), uses **SCRAM** auth, and connects the app with `MONGO_USERNAME` / `MONGO_PASSWORD` over the internal network. **MongoDB is not bound to a host port** in the default file, so only containers on the Compose network can reach it.
+
+To inspect data, open a shell as the database admin (password is the value of `MONGO_ROOT_PASSWORD` in `.env`):
+
+```bash
+docker compose exec -it mongo mongosh -u "${MONGO_ROOT_USER:-admin}" --authenticationDatabase admin
+```
+
+Then in `mongosh`: `use reapers_smokehouse` and `db.contactsubmissions.find().limit(3)`.
 
 ## Kubernetes Deployment
 
@@ -90,10 +144,24 @@ docker-compose up -d
 image: your-registry/reapers-smokehouse:latest
 ```
 
-2. **Deploy all resources:**
+2. **Create credentials and deploy MongoDB** (PVC needs a default `StorageClass`, or edit `mongodb.yaml`):
+
+Edit `k8s/mongodb-secret.yaml` and replace `mongo-root-password` with a strong secret (or create the Secret with `kubectl create secret generic` instead of committing real passwords).
+
 ```bash
-kubectl apply -f k8s/
+kubectl apply -f k8s/mongodb-secret.yaml
+kubectl apply -f k8s/mongodb.yaml
 ```
+
+Wait until the MongoDB pod is ready. The database listens only on **ClusterIP** service `mongodb` (not on the public internet). Then deploy the app and the rest:
+
+```bash
+kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml -f k8s/ingress.yaml -f k8s/hpa.yaml
+```
+
+The app reads **`MONGO_USERNAME`**, **`MONGO_PASSWORD`**, and related env vars from the same Secret (see `k8s/deployment.yaml`). **Readiness** uses `GET /ready` (MongoDB connected); liveness uses `GET /health`.
+
+**First-time init:** `MONGO_INITDB_*` is applied only when the MongoDB data directory is **empty**. Enabling auth on an existing unsecured volume requires a [manual user-creation procedure](https://www.mongodb.com/docs/manual/tutorial/enable-authentication/), not just changing the Deployment.
 
 3. **Check deployment status:**
 ```bash

@@ -4,6 +4,17 @@ This directory contains GitHub Actions workflows for CI/CD.
 
 ## Workflows
 
+### PR Security Scan (`pr-security-scan.yml`)
+
+Runs on every pull request targeting `main`. This workflow is the **vulnerability gate**: it fails if `npm audit` reports **High** or **Critical** issues. It also runs **Semgrep** (SAST) and **OWASP ZAP Baseline** (DAST) against the app started with Docker Compose.
+
+**Jobs:**
+
+1. **Vulnerability audit** — `npm ci` then `npm audit --audit-level=high` (fails on High or Critical).
+2. **Semgrep** — `semgrep scan --config auto` via Docker; exit code 1 (findings) does not fail the job, other exit codes fail.
+3. **OWASP ZAP Baseline** — brings up MongoDB + app with Compose, runs `zap-baseline.py` against `http://host.docker.internal:3000` with `-I` (fail on new high-risk items, not on all warnings).
+4. **Security scan summary** — aggregates status; fails the workflow if any required job failed.
+
 ### PR Build and Test (`pr-build.yml`)
 
 Runs on all pull requests targeting the `main` branch.
@@ -16,10 +27,9 @@ Runs on all pull requests targeting the `main` branch.
 
 **Jobs:**
 
-1. **Lint and Audit**
-   - Runs `npm audit` to check for security vulnerabilities
-   - Checks for outdated dependencies
-   - Fails if moderate or higher severity vulnerabilities are found
+1. **Dependencies**
+   - Installs dependencies with `npm ci`
+   - Lists outdated packages (`npm outdated`, informational)
 
 2. **Build and Test**
    - Installs dependencies
@@ -29,21 +39,16 @@ Runs on all pull requests targeting the `main` branch.
 
 3. **Docker Build**
    - Builds the Docker image using the Dockerfile
-   - Tests the built image by running it and checking the health endpoint
+   - Tests the built image by running Compose (MongoDB + app) and checking `/ready`
    - Uses Docker Buildx for multi-platform support
    - Caches layers for faster builds
 
-4. **Security Scan**
-   - Runs comprehensive security audit
-   - Reports vulnerabilities in a structured format
-   - Continues on error to provide full report
-
-5. **Validate Kubernetes Manifests**
+4. **Validate Kubernetes Manifests**
    - Validates all Kubernetes YAML files using `kubectl --dry-run`
-   - Ensures manifests are syntactically correct
+   - Includes `mongodb-secret.yaml`, `mongodb.yaml`, and the app deployment (MongoDB credentials via Secret)
    - Only runs on PRs from the same repository (not forks)
 
-6. **Build Summary**
+5. **Build Summary**
    - Aggregates results from all jobs
    - Provides a summary in the GitHub Actions UI
    - Fails if any critical job fails
@@ -82,10 +87,10 @@ To add ESLint or other linting:
 
 ### Modifying Security Audit Level
 
-Change the audit level in the workflow:
+Edit **`pr-security-scan.yml`** (not `pr-build.yml`):
 
 ```yaml
-run: npm audit --audit-level=high  # or low, moderate, high, critical
+run: npm audit --audit-level=high  # high | critical — high fails on High and Critical
 ```
 
 ## Troubleshooting

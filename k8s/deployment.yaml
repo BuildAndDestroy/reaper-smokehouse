@@ -26,6 +26,25 @@ spec:
           value: "3000"
         - name: NODE_ENV
           value: "production"
+        # Same credentials as MongoDB root (see k8s/mongodb-secret.yaml). For least privilege, add a dedicated DB user and split secrets later.
+        - name: MONGO_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: mongo-root-username
+        - name: MONGO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: mongo-root-password
+        - name: MONGO_HOST
+          value: "mongodb"
+        - name: MONGO_PORT
+          value: "27017"
+        - name: MONGO_DATABASE
+          value: "reapers_smokehouse"
+        - name: MONGO_AUTH_SOURCE
+          value: "admin"
         resources:
           requests:
             memory: "128Mi"
@@ -43,7 +62,7 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /health
+            path: /ready
             port: 3000
           initialDelaySeconds: 10
           periodSeconds: 5

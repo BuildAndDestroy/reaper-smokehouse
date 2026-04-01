@@ -393,6 +393,41 @@ body {
     transition: background-color 0.3s ease;
 }
 
+.contact-form-feedback {
+    margin-bottom: 1.25rem;
+    padding: 0.85rem 1rem;
+    border-radius: 5px;
+    font-size: 0.95rem;
+    line-height: 1.45;
+}
+
+.contact-form-feedback[hidden] {
+    display: none;
+}
+
+.contact-form-feedback--success {
+    background-color: rgba(46, 160, 67, 0.15);
+    color: var(--text-primary);
+    border: 1px solid rgba(46, 160, 67, 0.45);
+}
+
+.contact-form-feedback--error {
+    background-color: rgba(200, 40, 40, 0.12);
+    color: #b91c1c;
+    border: 1px solid rgba(200, 40, 40, 0.35);
+}
+
+.contact-form-feedback--validation {
+    background-color: rgba(200, 120, 0, 0.1);
+    color: var(--text-primary);
+    border: 1px solid rgba(200, 120, 0, 0.35);
+}
+
+.contact-form-feedback ul {
+    margin: 0.5rem 0 0;
+    padding-left: 1.25rem;
+}
+
 .form-group {
     margin-bottom: 1.5rem;
 }

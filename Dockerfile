@@ -39,6 +39,7 @@ COPY --from=builder /app/css ./css
 COPY --from=builder /app/js ./js
 COPY --from=builder /app/assets ./assets
 COPY --from=builder /app/server.js ./
+COPY --from=builder /app/models ./models
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \

@@ -3,9 +3,35 @@ const express = require('express');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 const { body, validationResult } = require('express-validator');
+const ContactSubmission = require('./models/contactSubmission');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+/**
+ * Prefer MONGODB_URI. Otherwise build from MONGO_USERNAME + MONGO_PASSWORD (e.g. Kubernetes secrets)
+ * so passwords do not need to be embedded in a single URI string.
+ */
+function resolveMongoUri() {
+    const explicit = process.env.MONGODB_URI;
+    if (explicit && String(explicit).trim() !== '') {
+        return explicit.trim();
+    }
+    const user = process.env.MONGO_USERNAME;
+    const pass = process.env.MONGO_PASSWORD;
+    const host = process.env.MONGO_HOST || '127.0.0.1';
+    const port = process.env.MONGO_PORT || '27017';
+    const db = process.env.MONGO_DATABASE || 'reapers_smokehouse';
+    const authSource = process.env.MONGO_AUTH_SOURCE || 'admin';
+    if (user && pass) {
+        return `mongodb://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}?authSource=${encodeURIComponent(authSource)}`;
+    }
+    return null;
+}
+
+const MONGODB_URI = resolveMongoUri();
 
 // Security Middleware
 // Helmet helps secure Express apps by setting various HTTP headers
@@ -57,13 +83,31 @@ app.use('/js', express.static(path.join(__dirname, 'js')));
 // Serve assets
 app.use('/assets', express.static(path.join(__dirname, 'assets')));
 
-// Health check endpoint for Kubernetes
+function mongoStatus() {
+    const state = mongoose.connection.readyState;
+    const labels = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
+    return labels[state] || 'unknown';
+}
+
+// Liveness: process is up (does not depend on MongoDB)
 app.get('/health', (req, res) => {
-    res.status(200).json({ 
-        status: 'healthy', 
+    res.status(200).json({
+        status: 'healthy',
         timestamp: new Date().toISOString(),
-        service: 'reapers-smokehouse'
+        service: 'reapers-smokehouse',
+        mongodb: mongoStatus(),
     });
+});
+
+// Readiness: MongoDB available for contact form and related traffic
+app.get('/ready', (req, res) => {
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({
+            ready: false,
+            mongodb: mongoStatus(),
+        });
+    }
+    res.status(200).json({ ready: true, mongodb: 'connected' });
 });
 
 // Input validation and sanitization rules for contact form
@@ -90,8 +134,7 @@ const contactValidation = [
 ];
 
 // API endpoint for contact form with security measures
-app.post('/api/contact', contactLimiter, contactValidation, (req, res) => {
-    // Check for validation errors
+app.post('/api/contact', contactLimiter, contactValidation, async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
         return res.status(400).json({
@@ -103,40 +146,45 @@ app.post('/api/contact', contactLimiter, contactValidation, (req, res) => {
         });
     }
 
-    const { name, email, message } = req.body;
-    
-    // In a production environment, you would:
-    // 1. ✅ Validate the input (DONE)
-    // 2. Send an email using a service like SendGrid, AWS SES, etc.
-    // 3. Store in database (sanitized data)
-    // 4. Return appropriate response (DONE)
-    
-    // Log sanitized data (no sensitive information in production logs)
-    // In production, use a proper logging library like Winston or Pino
-    if (process.env.NODE_ENV === 'development') {
-        console.log('Contact form submission received:', { 
-            name: name.substring(0, 20) + '...', // Truncate for logging
-            email: email.substring(0, 10) + '...', // Truncate for logging
-            messageLength: message.length 
+    if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({
+            success: false,
+            message: 'Service temporarily unavailable. Please try again later.',
         });
     }
-    
-    // TODO: Send email notification
-    // TODO: Store in database
-    
-    res.json({ 
-        success: true, 
-        message: 'Thank you for your message! We will get back to you soon.' 
+
+    const { name, email, message } = req.body;
+
+    if (process.env.NODE_ENV === 'development') {
+        console.log('Contact form submission received:', {
+            name: name.substring(0, 20) + '...',
+            email: email.substring(0, 10) + '...',
+            messageLength: message.length
+        });
+    }
+
+    try {
+        await ContactSubmission.create({ name, email, message });
+    } catch (err) {
+        console.error('Failed to save contact submission:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'An error occurred processing your request',
+        });
+    }
+
+    res.json({
+        success: true,
+        message: 'Thank you for your message! We will get back to you soon.'
     });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    // Don't leak error details in production
     const isDevelopment = process.env.NODE_ENV === 'development';
-    
+
     console.error('Error:', isDevelopment ? err : 'An error occurred');
-    
+
     res.status(err.status || 500).json({
         success: false,
         message: isDevelopment ? err.message : 'An error occurred processing your request',
@@ -149,20 +197,69 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`🔥 Reaper's Smokehouse server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+let server;
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('SIGTERM signal received: closing HTTP server');
-    process.exit(0);
-});
+async function connectMongoWithRetry(uri, maxAttempts = 12, delayMs = 2500) {
+    mongoose.set('strictQuery', true);
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await mongoose.connect(uri);
+            console.log('Connected to MongoDB');
+            return;
+        } catch (err) {
+            lastErr = err;
+            console.error(
+                `MongoDB connection attempt ${attempt}/${maxAttempts} failed:`,
+                err.message
+            );
+            if (attempt < maxAttempts) {
+                await new Promise(r => setTimeout(r, delayMs));
+            }
+        }
+    }
+    throw lastErr;
+}
 
-process.on('SIGINT', () => {
-    console.log('SIGINT signal received: closing HTTP server');
-    process.exit(0);
-});
+async function start() {
+    if (!MONGODB_URI) {
+        console.error(
+            'MongoDB is not configured. Set MONGODB_URI or MONGO_USERNAME and MONGO_PASSWORD.'
+        );
+        process.exit(1);
+    }
 
+    try {
+        await connectMongoWithRetry(MONGODB_URI);
+    } catch (err) {
+        console.error('MongoDB connection failed after retries:', err.message);
+        process.exit(1);
+    }
+
+    server = app.listen(PORT, () => {
+        console.log(`🔥 Reaper's Smokehouse server running on port ${PORT}`);
+        console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    });
+}
+
+function shutdown(signal) {
+    console.log(`${signal} received: closing HTTP server`);
+    if (!server) {
+        process.exit(0);
+        return;
+    }
+    server.close(async () => {
+        try {
+            await mongoose.connection.close();
+            console.log('MongoDB connection closed');
+        } catch (e) {
+            console.error('Error closing MongoDB:', e.message);
+        }
+        process.exit(0);
+    });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+start();

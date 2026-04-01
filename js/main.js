@@ -132,17 +132,68 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Contact Form Handling
     const contactForm = document.getElementById('contactForm');
+    const contactFeedback = document.getElementById('contactFormFeedback');
+
+    function clearContactFeedback() {
+        if (!contactFeedback) return;
+        contactFeedback.textContent = '';
+        contactFeedback.innerHTML = '';
+        contactFeedback.className = 'contact-form-feedback';
+        contactFeedback.hidden = true;
+    }
+
+    function showContactSuccess(message) {
+        if (!contactFeedback) return;
+        contactFeedback.textContent =
+            message ||
+            'Thank you! We received your message and will get back to you soon.';
+        contactFeedback.className = 'contact-form-feedback contact-form-feedback--success';
+        contactFeedback.hidden = false;
+    }
+
+    function showContactServerError() {
+        if (!contactFeedback) return;
+        contactFeedback.textContent = 'Server error.';
+        contactFeedback.className = 'contact-form-feedback contact-form-feedback--error';
+        contactFeedback.hidden = false;
+    }
+
+    function showContactValidationErrors(errors) {
+        if (!contactFeedback) return;
+        const intro = document.createElement('p');
+        intro.textContent = 'Please fix the following:';
+        const list = document.createElement('ul');
+        errors.forEach(function (err) {
+            const li = document.createElement('li');
+            li.textContent = (err.field ? err.field + ': ' : '') + (err.message || '');
+            list.appendChild(li);
+        });
+        contactFeedback.innerHTML = '';
+        contactFeedback.appendChild(intro);
+        contactFeedback.appendChild(list);
+        contactFeedback.className = 'contact-form-feedback contact-form-feedback--validation';
+        contactFeedback.hidden = false;
+    }
+
+    function showContactClientMessage(message) {
+        if (!contactFeedback) return;
+        contactFeedback.textContent = message || 'Something went wrong. Please try again.';
+        contactFeedback.className = 'contact-form-feedback contact-form-feedback--error';
+        contactFeedback.hidden = false;
+    }
+
     if (contactForm) {
         contactForm.addEventListener('submit', async function(e) {
             e.preventDefault();
-            
+            clearContactFeedback();
+
             const submitButton = contactForm.querySelector('.submit-button');
             const originalButtonText = submitButton.textContent;
-            
+
             // Disable button and show loading state
             submitButton.disabled = true;
             submitButton.textContent = 'Sending...';
-            
+
             // Get form data
             const formData = {
                 name: document.getElementById('name').value,
@@ -151,7 +202,6 @@ document.addEventListener('DOMContentLoaded', function() {
             };
 
             try {
-                // Send to backend API
                 const response = await fetch('/api/contact', {
                     method: 'POST',
                     headers: {
@@ -160,31 +210,35 @@ document.addEventListener('DOMContentLoaded', function() {
                     body: JSON.stringify(formData)
                 });
 
-                const result = await response.json();
-                
-                if (response.ok) {
-                    // Show success message
-                    alert(result.message || 'Thank you for your message! We will get back to you soon.');
-                    // Reset form
-                    contactForm.reset();
-                } else {
-                    // Handle validation errors
-                    if (result.errors && Array.isArray(result.errors)) {
-                        let errorMessage = 'Please fix the following errors:\n';
-                        result.errors.forEach(err => {
-                            errorMessage += `- ${err.field}: ${err.message}\n`;
-                        });
-                        alert(errorMessage);
-                    } else {
-                        alert(result.message || 'Failed to send message. Please try again later.');
+                let result = {};
+                try {
+                    result = await response.json();
+                } catch (parseErr) {
+                    if (!response.ok) {
+                        showContactServerError();
+                        return;
                     }
+                    console.error('Unexpected response body:', parseErr);
+                    showContactServerError();
+                    return;
+                }
+
+                if (response.ok) {
+                    showContactSuccess(result.message);
+                    contactForm.reset();
+                } else if (response.status >= 500) {
+                    showContactServerError();
+                } else if (result.errors && Array.isArray(result.errors)) {
+                    showContactValidationErrors(result.errors);
+                } else {
+                    showContactClientMessage(
+                        result.message || 'Something went wrong. Please try again.'
+                    );
                 }
             } catch (error) {
-                // Don't expose internal error details to users
                 console.error('Error submitting form:', error);
-                alert('Sorry, there was an error sending your message. Please try again later.');
+                showContactServerError();
             } finally {
-                // Re-enable button
                 submitButton.disabled = false;
                 submitButton.textContent = originalButtonText;
             }
