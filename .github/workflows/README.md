@@ -6,14 +6,15 @@ This directory contains GitHub Actions workflows for CI/CD.
 
 ### PR Security Scan (`pr-security-scan.yml`)
 
-Runs on every pull request targeting `main`. This workflow is the **vulnerability gate**: it fails if `npm audit` reports **High** or **Critical** issues. It also runs **Semgrep** (SAST) and **OWASP ZAP Baseline** (DAST) against the app started with Docker Compose.
+Runs on every PR targeting `main`: **npm audit** (High/Critical gate), **Semgrep** (SAST), and **OWASP ZAP Baseline** (DAST). ZAP uses a **tmpfs** mount on `/zap/wrk` so the ZAP container can write its automation plan on GitHub-hosted runners.
 
-**Jobs:**
+**Jobs:** vulnerability audit, Semgrep, OWASP ZAP Baseline, summary.
 
-1. **Vulnerability audit** — `npm ci` then `npm audit --audit-level=high` (fails on High or Critical).
-2. **Semgrep** — `semgrep scan --config auto` via Docker; exit code 1 (findings) does not fail the job, other exit codes fail.
-3. **OWASP ZAP Baseline** — brings up MongoDB + app with Compose, runs `zap-baseline.py` against `http://host.docker.internal:3000` with `-I` (fail on new high-risk items, not on all warnings).
-4. **Security scan summary** — aggregates status; fails the workflow if any required job failed.
+### OWASP ZAP Baseline — DAST (`dast-zap-baseline.yml`)
+
+Runs on **push to `main`** and **`workflow_dispatch`** (run manually from the Actions tab). Starts Docker Compose (MongoDB + app), then runs `zap-baseline.py` against `http://host.docker.internal:3000` with `-I`.
+
+Uses **`--tmpfs /zap/wrk`** with `mode=1777` so the ZAP image’s non-root user can write `zap.yaml` (named volumes are often root-owned and caused permission errors on GitHub-hosted runners).
 
 ### PR Build and Test (`pr-build.yml`)
 

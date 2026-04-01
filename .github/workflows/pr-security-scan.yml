@@ -1,4 +1,6 @@
-# OWASP-oriented checks on every PR: npm audit (High/Critical gate), Semgrep SAST, ZAP baseline DAST.
+# PR security: npm audit (High/Critical), Semgrep (SAST), OWASP ZAP Baseline (DAST).
+# ZAP uses --tmpfs /zap/wrk (world-writable) so the image's non-root user can write zap.yaml on runners.
+# DAST also runs on push to main — see dast-zap-baseline.yml.
 name: PR Security Scan
 
 permissions:
@@ -18,7 +20,6 @@ env:
   NODE_VERSION: '18'
 
 jobs:
-  # Blocks merge if npm reports High or Critical advisories in the dependency tree.
   vulnerability-audit:
     name: Vulnerability scan (npm audit — High & Critical)
     runs-on: ubuntu-latest
@@ -35,7 +36,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # --audit-level=high: exit non-zero for high or critical (npm includes both).
       - name: Fail on High or Critical vulnerabilities
         run: npm audit --audit-level=high
 
@@ -46,7 +46,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Exit 1 = findings (report only); 2+ = tool errors (fail). K8s/Express rules are often noisy until tuned.
       - name: Run Semgrep
         run: |
           set +e
@@ -62,7 +61,7 @@ jobs:
   owasp-zap-baseline:
     name: OWASP ZAP Baseline (DAST)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       MONGO_ROOT_PASSWORD: github-actions-ci-mongo-password
     steps:
@@ -81,22 +80,16 @@ jobs:
               echo "App is ready"
               exit 0
             fi
-            if [ "$i" -eq 45 ]; then
-              echo "Timeout waiting for /ready"
-              docker compose logs
-              exit 1
-            fi
             sleep 3
           done
+          echo "Timeout waiting for /ready"
+          docker compose logs
+          exit 1
 
-      # zap-baseline.py writes under /zap/wrk. Use a named volume (not a bind mount): the ZAP image
-      # runs as user `zap` and cannot write to a host dir owned by the `runner` user (Permission denied).
       - name: OWASP ZAP baseline scan
         run: |
-          docker volume create zap-baseline-wrk
-          trap 'docker volume rm zap-baseline-wrk 2>/dev/null || true' EXIT
           docker run --rm \
-            -v zap-baseline-wrk:/zap/wrk \
+            --tmpfs /zap/wrk:rw,nosuid,nodev,mode=1777 \
             --add-host=host.docker.internal:host-gateway \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py -t http://host.docker.internal:3000 -I -d
@@ -113,7 +106,7 @@ jobs:
     steps:
       - name: Report status
         run: |
-          echo "## Security scan summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "## PR security summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Job | Result |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
@@ -127,4 +120,4 @@ jobs:
             echo "One or more security jobs did not succeed."
             exit 1
           fi
-          echo "All security checks passed."
+          echo "All PR security checks passed."
