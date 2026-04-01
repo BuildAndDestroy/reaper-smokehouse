@@ -10,3 +10,6 @@ coverage/
 dist/
 build/
 
+# OWASP ZAP baseline (local / CI scratch)
+zap-wrk/
+

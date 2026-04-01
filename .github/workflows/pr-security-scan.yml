@@ -89,9 +89,13 @@ jobs:
             sleep 3
           done
 
+      # zap-baseline.py writes /zap/wrk/zap.yaml — the image expects a mounted writable /zap/wrk
       - name: OWASP ZAP baseline scan
         run: |
-          docker run --rm --add-host=host.docker.internal:host-gateway \
+          mkdir -p zap-wrk
+          docker run --rm \
+            -v "$PWD/zap-wrk:/zap/wrk:rw" \
+            --add-host=host.docker.internal:host-gateway \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py -t http://host.docker.internal:3000 -I -d
 
