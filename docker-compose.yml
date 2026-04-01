@@ -1,6 +1,27 @@
-version: '3.8'
-
 services:
+  mongo:
+    image: mongo:7
+    container_name: reapers-smokehouse-mongo
+    restart: unless-stopped
+    # MongoDB is NOT published to the host — only the app service can reach it on the Compose network.
+    # To open a shell: docker compose exec mongo mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      # Default is for local use only. Set MONGO_ROOT_PASSWORD in .env or the environment for production.
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-dev_insecure_mongo_password}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'mongosh -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.adminCommand({ping:1}).ok" | grep -q 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
   reapers-smokehouse:
     build:
       context: .
@@ -11,11 +32,23 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+      # Built in server.js via encodeURIComponent (safe for special characters in passwords)
+      - MONGO_USERNAME=${MONGO_ROOT_USER:-admin}
+      - MONGO_PASSWORD=${MONGO_ROOT_PASSWORD:-dev_insecure_mongo_password}
+      - MONGO_HOST=mongo
+      - MONGO_PORT=27017
+      - MONGO_DATABASE=reapers_smokehouse
+      - MONGO_AUTH_SOURCE=admin
+    depends_on:
+      mongo:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 5s
+      start_period: 40s
 
+volumes:
+  mongo_data:

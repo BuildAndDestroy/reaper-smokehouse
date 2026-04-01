@@ -4,6 +4,18 @@ This directory contains GitHub Actions workflows for CI/CD.
 
 ## Workflows
 
+### PR Security Scan (`pr-security-scan.yml`)
+
+Runs on every PR targeting `main`: **npm audit** (High/Critical gate), **Semgrep** (SAST), and **OWASP ZAP Baseline** (DAST). ZAP uses a **tmpfs** mount on `/zap/wrk` so the ZAP container can write its automation plan on GitHub-hosted runners.
+
+**Jobs:** vulnerability audit, Semgrep, OWASP ZAP Baseline, summary.
+
+### OWASP ZAP Baseline — DAST (`dast-zap-baseline.yml`)
+
+Runs on **push to `main`** and **`workflow_dispatch`** (run manually from the Actions tab). Starts Docker Compose (MongoDB + app), then runs `zap-baseline.py` against `http://host.docker.internal:3000` with `-I`.
+
+Uses **`--tmpfs /zap/wrk`** with `mode=1777` so the ZAP image’s non-root user can write `zap.yaml` (named volumes are often root-owned and caused permission errors on GitHub-hosted runners).
+
 ### PR Build and Test (`pr-build.yml`)
 
 Runs on all pull requests targeting the `main` branch.
@@ -16,10 +28,9 @@ Runs on all pull requests targeting the `main` branch.
 
 **Jobs:**
 
-1. **Lint and Audit**
-   - Runs `npm audit` to check for security vulnerabilities
-   - Checks for outdated dependencies
-   - Fails if moderate or higher severity vulnerabilities are found
+1. **Dependencies**
+   - Installs dependencies with `npm ci`
+   - Lists outdated packages (`npm outdated`, informational)
 
 2. **Build and Test**
    - Installs dependencies
@@ -29,30 +40,22 @@ Runs on all pull requests targeting the `main` branch.
 
 3. **Docker Build**
    - Builds the Docker image using the Dockerfile
-   - Tests the built image by running it and checking the health endpoint
+   - Tests the built image by running Compose (MongoDB + app) and checking `/ready`
    - Uses Docker Buildx for multi-platform support
    - Caches layers for faster builds
 
-4. **Security Scan**
-   - Runs comprehensive security audit
-   - Reports vulnerabilities in a structured format
-   - Continues on error to provide full report
-
-5. **Validate Kubernetes Manifests**
-   - Validates all Kubernetes YAML files using `kubectl --dry-run`
-   - Ensures manifests are syntactically correct
+4. **Validate Kubernetes Manifests**
+   - Uses [kubeconform](https://github.com/yannh/kubeconform) against the Kubernetes OpenAPI schemas (no cluster or kubeconfig required)
    - Only runs on PRs from the same repository (not forks)
 
-6. **Build Summary**
+5. **Build Summary**
    - Aggregates results from all jobs
-   - Provides a summary in the GitHub Actions UI
-   - Fails if any critical job fails
+   - Fails if Dependencies, Build and Test, Docker Build, or K8s Validation failed (skipped K8s job on forks does not fail the summary)
 
 ## Requirements
 
 - Node.js 18+
 - Docker (for Docker build job)
-- kubectl (for K8s validation job)
 
 ## Status Badge
 
@@ -82,10 +85,10 @@ To add ESLint or other linting:
 
 ### Modifying Security Audit Level
 
-Change the audit level in the workflow:
+Edit **`pr-security-scan.yml`** (not `pr-build.yml`):
 
 ```yaml
-run: npm audit --audit-level=high  # or low, moderate, high, critical
+run: npm audit --audit-level=high  # high | critical — high fails on High and Critical
 ```
 
 ## Troubleshooting

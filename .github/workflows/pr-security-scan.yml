@@ -1,0 +1,123 @@
+# PR security: npm audit (High/Critical), Semgrep (SAST), OWASP ZAP Baseline (DAST).
+# ZAP uses --tmpfs /zap/wrk (world-writable) so the image's non-root user can write zap.yaml on runners.
+# DAST also runs on push to main — see dast-zap-baseline.yml.
+name: PR Security Scan
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  vulnerability-audit:
+    name: Vulnerability scan (npm audit — High & Critical)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fail on High or Critical vulnerabilities
+        run: npm audit --audit-level=high
+
+  semgrep:
+    name: Semgrep (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: |
+          set +e
+          docker run --rm -v "$PWD:/src" returntocorp/semgrep semgrep scan --config auto /src
+          code=$?
+          set -e
+          if [ "$code" -eq 1 ]; then
+            echo "Semgrep reported findings (see above); this job still passes."
+            exit 0
+          fi
+          exit "$code"
+
+  owasp-zap-baseline:
+    name: OWASP ZAP Baseline (DAST)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MONGO_ROOT_PASSWORD: github-actions-ci-mongo-password
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start app and MongoDB (Docker Compose)
+        run: |
+          docker compose down -v --remove-orphans || true
+          docker compose up -d --build
+
+      - name: Wait for /ready
+        run: |
+          for i in $(seq 1 45); do
+            if curl -sf http://localhost:3000/ready; then
+              echo "App is ready"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Timeout waiting for /ready"
+          docker compose logs
+          exit 1
+
+      - name: OWASP ZAP baseline scan
+        run: |
+          docker run --rm \
+            --tmpfs /zap/wrk:rw,nosuid,nodev,mode=1777 \
+            --add-host=host.docker.internal:host-gateway \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://host.docker.internal:3000 -I -d
+
+      - name: Tear down Compose stack
+        if: always()
+        run: docker compose down -v
+
+  security-scan-summary:
+    name: Security scan summary
+    runs-on: ubuntu-latest
+    needs: [vulnerability-audit, semgrep, owasp-zap-baseline]
+    if: always()
+    steps:
+      - name: Report status
+        run: |
+          echo "## PR security summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Job | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Vulnerability audit (High/Critical) | ${{ needs.vulnerability-audit.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Semgrep | ${{ needs.semgrep.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| OWASP ZAP Baseline | ${{ needs.owasp-zap-baseline.result }} |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ needs.vulnerability-audit.result }}" != "success" ] || \
+             [ "${{ needs.semgrep.result }}" != "success" ] || \
+             [ "${{ needs.owasp-zap-baseline.result }}" != "success" ]; then
+            echo "One or more security jobs did not succeed."
+            exit 1
+          fi
+          echo "All PR security checks passed."

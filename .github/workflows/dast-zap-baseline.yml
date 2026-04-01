@@ -1,0 +1,60 @@
+# OWASP ZAP Baseline against the Compose stack. Runs after merge to main (or manually).
+# PRs also run the same scan in pr-security-scan.yml; this workflow covers main without a PR.
+name: OWASP ZAP Baseline (DAST)
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: dast-zap-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MONGO_ROOT_PASSWORD: github-actions-ci-mongo-password
+
+jobs:
+  zap-baseline:
+    name: OWASP ZAP Baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start app and MongoDB (Docker Compose)
+        run: |
+          docker compose down -v --remove-orphans || true
+          docker compose up -d --build
+
+      - name: Wait for /ready
+        run: |
+          for i in $(seq 1 45); do
+            if curl -sf http://localhost:3000/ready; then
+              echo "App is ready"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Timeout waiting for /ready"
+          docker compose logs
+          exit 1
+
+      # Named/bind volumes are often root:root 755 → user `zap` cannot write zap.yaml.
+      # tmpfs with mode=1777 gives a writable /zap/wrk without running as root.
+      - name: OWASP ZAP baseline scan
+        run: |
+          docker run --rm \
+            --tmpfs /zap/wrk:rw,nosuid,nodev,mode=1777 \
+            --add-host=host.docker.internal:host-gateway \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://host.docker.internal:3000 -I -d
+
+      - name: Tear down Compose stack
+        if: always()
+        run: docker compose down -v
