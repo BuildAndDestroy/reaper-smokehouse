@@ -13,3 +13,6 @@ build/
 # OWASP ZAP baseline (local / CI scratch)
 zap-wrk/
 
+# Kubernetes — generated locally from scripts/k8s-gen-mongodb-secret.sh (never commit)
+k8s/mongodb-secret.yaml
+

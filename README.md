@@ -31,9 +31,11 @@ reapers-smokehouse/
 ├── assets/
 │   └── images/             # Image assets
 ├── models/                 # Mongoose models (contact submissions)
+├── scripts/
+│   └── k8s-gen-mongodb-secret.sh  # Writes gitignored k8s/mongodb-secret.yaml from env
 ├── k8s/                    # Kubernetes manifests
 │   ├── deployment.yaml
-│   ├── mongodb-secret.yaml # DB credentials (edit before real clusters)
+│   ├── mongodb-secret.example.yaml  # Template only — real Secret is generated, not committed
 │   ├── mongodb.yaml        # MongoDB + PVC + Service
 │   ├── service.yaml
 │   ├── ingress.yaml
@@ -135,7 +137,68 @@ Then in `mongosh`: `use reapers_smokehouse` and `db.contactsubmissions.find().li
 ### Prerequisites
 - Kubernetes cluster
 - kubectl configured
-- Docker image pushed to a registry (or use local image)
+- Docker image pushed to a registry (or use local image with Minikube below)
+
+### Secrets and config (avoid committing real values)
+
+**MongoDB credentials** are not kept in Git. The repo has **`k8s/mongodb-secret.example.yaml`** only. Locally or in CI/CD you generate the Secret from environment variables:
+
+```bash
+export MONGO_ROOT_PASSWORD='your-long-random-secret'   # required
+# optional: export MONGO_ROOT_USER=admin
+./scripts/k8s-gen-mongodb-secret.sh     # writes k8s/mongodb-secret.yaml (gitignored)
+kubectl apply -f k8s/mongodb-secret.yaml
+```
+
+Or pipe straight to the cluster (no file on disk):
+
+```bash
+export MONGO_ROOT_PASSWORD='...'
+./scripts/k8s-gen-mongodb-secret.sh - | kubectl apply -f -
+```
+
+**GitHub Actions / AWS:** do not store passwords in YAML. Use [encrypted secrets](https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions) and run the same `kubectl create secret ... --dry-run=client` step in the deploy workflow, or use **AWS Secrets Manager + External Secrets**, **Sealed Secrets**, or **SOPS** for GitOps.
+
+**Ingress hostname** is hardcoded in `k8s/ingress.yaml` for the sample domain. For multiple environments, use **Kustomize overlays**, **Helm values**, or render with `envsubst` from a private env file without committing it.
+
+### Local testing with Minikube
+
+Yes — **Minikube** is a good fit: it gives you a default **StorageClass** for the MongoDB PVC, **ClusterIP** networking that matches production, and you can build the app image **into Minikube’s Docker daemon** so `image: reapers-smokehouse:latest` with `imagePullPolicy: IfNotPresent` works without a registry.
+
+From the repository root:
+
+```bash
+# 1. Start the cluster (adjust driver if needed, e.g. --driver=docker)
+minikube start
+
+# 2. Point your shell at Minikube’s Docker and build the image there
+eval "$(minikube docker-env)"
+docker build -t reapers-smokehouse:latest .
+
+# 3. MongoDB Secret (not in Git — generate from env)
+export MONGO_ROOT_PASSWORD='your-local-dev-password'
+./scripts/k8s-gen-mongodb-secret.sh
+kubectl apply -f k8s/mongodb-secret.yaml
+
+# 4. MongoDB, then app + Service (skip Ingress/HPA until you need them)
+kubectl apply -f k8s/mongodb.yaml
+kubectl wait --for=condition=ready pod -l app=mongodb --timeout=180s
+
+kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
+
+kubectl get pods -w
+# When reapers-smokehouse pods are Ready:
+kubectl port-forward service/reapers-smokehouse-service 8080:80
+```
+
+Open **http://localhost:8080**. Tear down when done: `minikube delete` (or `kubectl delete -f k8s/...` in reverse order).
+
+**Optional**
+
+- **HPA:** `minikube addons enable metrics-server`, wait a minute, then `kubectl apply -f k8s/hpa.yaml`. The HPA’s minimum replica count (2) may scale the Deployment up from the 3 replicas in `deployment.yaml` after metrics appear; that is normal.
+- **Ingress:** `minikube addons enable ingress`, apply `k8s/ingress.yaml`, add a hosts entry for `reaperssmokehouse.com` to `minikube ip`, or use `minikube tunnel` and read the [Minikube ingress docs](https://minikube.sigs.k8s.io/docs/handbook/addons/ingress/).
+
+**Note:** Changing the Secret password after MongoDB’s PVC is already initialized does not rotate the DB user automatically — recreate the MongoDB PVC or manage users in the shell if you change credentials.
 
 ### Deploy to Kubernetes:
 
@@ -146,9 +209,9 @@ image: your-registry/reapers-smokehouse:latest
 
 2. **Create credentials and deploy MongoDB** (PVC needs a default `StorageClass`, or edit `mongodb.yaml`):
 
-Edit `k8s/mongodb-secret.yaml` and replace `mongo-root-password` with a strong secret (or create the Secret with `kubectl create secret generic` instead of committing real passwords).
-
 ```bash
+export MONGO_ROOT_PASSWORD='strong-secret-from-password-manager'
+./scripts/k8s-gen-mongodb-secret.sh
 kubectl apply -f k8s/mongodb-secret.yaml
 kubectl apply -f k8s/mongodb.yaml
 ```

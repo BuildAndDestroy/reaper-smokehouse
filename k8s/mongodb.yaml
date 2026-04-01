@@ -1,6 +1,6 @@
 # MongoDB for contact form persistence (single-node, PVC-backed).
 # Requires a default StorageClass or adjust storageClassName for your cluster.
-# Apply k8s/mongodb-secret.yaml first (edit credentials) so the database starts with authentication enabled.
+# Requires Secret mongodb-credentials — generate with scripts/k8s-gen-mongodb-secret.sh (see mongodb-secret.example.yaml).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

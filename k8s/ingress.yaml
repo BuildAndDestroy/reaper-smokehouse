@@ -1,27 +1,29 @@
+# HTTP routing for Traefik, NGINX Ingress, or any controller that honors networking.k8s.io/v1 Ingress.
+# Set spec.ingressClassName to match your cluster (Traefik often uses "traefik").
+#
+# Optional annotations (uncomment on metadata.annotations as needed):
+#   traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+#   cert-manager.io/cluster-issuer: letsencrypt-prod
+#   nginx.ingress.kubernetes.io/ssl-redirect: "true"   # NGINX Ingress only
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: reapers-smokehouse-ingress
-  annotations:
-    kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    # Uncomment and configure for SSL/TLS
-    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
-  # Uncomment and configure for SSL/TLS
+  ingressClassName: traefik
+  # Uncomment for HTTPS once you have a TLS secret (cert-manager or manual).
   # tls:
-  # - hosts:
-  #   - reaperssmokehouse.com
-  #   secretName: reapers-smokehouse-tls
+  #   - hosts:
+  #       - reaperssmokehouse.com
+  #     secretName: reapers-smokehouse-tls
   rules:
-  - host: reaperssmokehouse.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: reapers-smokehouse-service
-            port:
-              number: 80
-
+    - host: reaperssmokehouse.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: reapers-smokehouse-service
+                port:
+                  number: 80
